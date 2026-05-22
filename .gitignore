@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+*.egg-info/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude
+.claude/
+
+# HuggingFace cache (local downloads)
+.cache/
+
+# Local checkpoints
+checkpoints/
+runs/
+
+# Intermediate progress files (regeneratable; keep final outputs)
+data/augment_progress.jsonl
+data/type2_progress.jsonl
+data/type3_llm_progress.jsonl
+data/type1_llm_progress.jsonl
+data/llm_detector_progress.jsonl
