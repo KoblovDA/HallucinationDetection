@@ -79,10 +79,14 @@
 
 **Результат span micro F1:** Type 1 = 0.216, Type 2 = 0.841, Type 3 = 0.722. Прогнано на 150/150/149 test-сэмплах через Colab. LettuceDetect силён на Type 2 (его тренинговый домен RAGTruth), но проваливает Type 1 — точечные swap'ы значений (median 9 chars span) для него непривычная задача. Файлы: `src/evaluation.py`, `src/baselines/lettucedetect_runner.py`, `scripts/eval_lettucedetect.py`, `notebooks/lettucedetect_baseline.ipynb`, `lettucedetect_baseline.ipynb` (исполненная копия из Colab).
 
-## [todo] Baseline: LookBackLens
+## [in progress] Baseline: LookBackLens
 
-- **Зачем:** второй бейзлайн из условия задачи.
-- **Заметки:** нужен Llama-2-7B-chat для извлечения attention; считаем на сервере, в финальный ноутбук кладём предвычисленные фичи.
+- **Зачем:** второй обязательный бейзлайн из условия задачи (attention-based).
+- **Что готово:**
+  - `src/baselines/lookback_lens.py` — extraction (lookback ratio per token), feature aggregation per span, sliding-window decoder.
+  - `notebooks/lookback_lens_kaggle.ipynb` — end-to-end Colab/Kaggle ноутбук. Backbone `meta-llama/Llama-3.2-3B-Instruct` (~3.2B params, fp16, помещается на P100/T4 16 GB). При желании можно сменить на Qwen2.5-3B или Gemma-2-2b без HF token'а.
+- **Время:** оценка ~2-3 часа GPU на full train+val+test.
+- **План:** залить combined_*.jsonl в Colab/Kaggle, запустить, получить таблицу метрик в одном формате с LettuceDetect/LLM.
 
 ## [done] Improvement 1: LLM-as-judge детектор (Qwen3-235B через OpenRouter)
 
