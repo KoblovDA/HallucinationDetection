@@ -1,0 +1,46 @@
+[
+    {
+        "Split": "Combined",
+        "N": 599,
+        "Span P": 0.962,
+        "Span R": 0.997,
+        "Span F1": 0.979,
+        "Span macro F1": 0.91,
+        "Ex P": 0.951,
+        "Ex R": 0.991,
+        "Ex F1": 0.971
+    },
+    {
+        "Split": "Type 1 + clean",
+        "N": 300,
+        "Span P": 0.636,
+        "Span R": 0.949,
+        "Span F1": 0.762,
+        "Span macro F1": 0.826,
+        "Ex P": 0.864,
+        "Ex R": 0.973,
+        "Ex F1": 0.915
+    },
+    {
+        "Split": "Type 2 + clean",
+        "N": 300,
+        "Span P": 0.97,
+        "Span R": 1.0,
+        "Span F1": 0.985,
+        "Span macro F1": 0.921,
+        "Ex P": 0.867,
+        "Ex R": 1.0,
+        "Ex F1": 0.929
+    },
+    {
+        "Split": "Type 3 + clean",
+        "N": 299,
+        "Span P": 0.963,
+        "Span R": 1.0,
+        "Span F1": 0.981,
+        "Span macro F1": 0.921,
+        "Ex P": 0.866,
+        "Ex R": 1.0,
+        "Ex F1": 0.928
+    }
+]

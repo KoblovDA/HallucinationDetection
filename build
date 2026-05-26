@@ -1,0 +1,13 @@
+#! /bin/bash
+
+source credentials
+
+USER_ID=$(id -u)
+GROUP_ID=$(id -g)
+
+echo "Building image for user $USER_ID:$GROUP_ID..."
+
+docker build -t ${DOCKER_NAME} . \
+        --build-arg DOCKER_NAME=${DOCKER_NAME} \
+        --build-arg DOCKER_USER_ID=${USER_ID} \
+        --build-arg DOCKER_GROUP_ID=${GROUP_ID}

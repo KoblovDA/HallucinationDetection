@@ -1,0 +1,30 @@
+#! /bin/bash
+source credentials
+
+CURRENT_DIR=$(pwd)
+USER_ID=$(id -u)
+GROUP_ID=$(id -g)
+
+echo "Launching container..."
+echo "Mounting $CURRENT_DIR to /app"
+
+docker run \
+  -d \
+  --shm-size=8g \
+  --memory=16g \
+  --cpus=16 \
+  --user ${USER_ID}:${GROUP_ID} \
+  --name ${CONTAINER_NAME} \
+  --rm \
+  --init \
+  --gpus '"device=0,1,2,3,4,5,6"' \
+  -v "${CURRENT_DIR}:/app" \
+  -p 8881:8881 \
+  ${DOCKER_NAME} bash -c "jupyter notebook --allow-root --ip='0.0.0.0' --port=8881 --NotebookApp.token='' --NotebookApp.password=''"
+
+echo "------------------------------------------------------------------"
+echo "Jupyter Notebook is running at: http://localhost:8881"
+echo "------------------------------------------------------------------"
+echo "Entering container shell... (Type 'exit' to leave shell, Notebook will keep running)"
+
+docker exec -it ${CONTAINER_NAME} /bin/bash

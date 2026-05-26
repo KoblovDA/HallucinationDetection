@@ -1,141 +1,86 @@
 # Hallucination Detection in Tool Calling
 
-NLP course assignment. Цель — построить пайплайн **детекции галлюцинаций на span-уровне** в диалогах с tool calling. На вход модель получает `(query, tool_output, answer)`, на выход — char-level спаны участков ответа, которые являются галлюцинациями.
+This repository contains the codebase, dataset generation pipelines, and evaluation notebooks for detecting hallucinations at the **character-span level** in tool-augmented LLM dialogues. 
 
-## Задача
+The project introduces a custom dataset built on top of the ToolACE corpus and evaluates five different detection strategies, ranging from off-the-shelf token classifiers and internal attention analysis (LookBackLens) to massive LLM-as-a-judge pipelines and domain-specific fine-tuning.
 
-Три типа галлюцинаций для построения датасета:
+## Key Results
 
-| Тип | Что это | Пример |
-|---|---|---|
-| **Type 1 — Hallucination** | финальный ответ противоречит выходу тула | tool: `{weather: "sunny"}` → answer: «The weather is **rainy**» |
-| **Type 2 — Overgeneration** | ответ содержит факт, не подтверждённый tool_output | «The weather is sunny, **and has been good for months**» |
-| **Type 3 — Missing tool** | ответ предлагает действие, требующее тула не в списке доступных | «The weather is sunny. **Want me to book a ticket?**» (но Booking_API нет) |
+We evaluated all methods on a combined test set (N=599) containing 25% clean interactions and 75% hallucinated samples across three distinct hallucination types. The primary metric is **Span Micro F1** (RAGTruth-style character intersection).
 
-Формат разметки — [RAGTruth](https://huggingface.co/datasets/wandb/RAGTruth-processed): `{query, context, output, hallucination_labels: [{start, end, text, type}]}`.
+| Method | Combined F1 | Type 1 (Contradiction) | Type 2 (Overgeneration) | Type 3 (Missing Tool) |
+|:---|:---:|:---:|:---:|:---:|
+| **Baseline 1:** LettuceDetect (off-the-shelf) | 0.660 | 0.137 | 0.726 | 0.597 |
+| **Baseline 2:** LookBackLens (Qwen2.5-3B + LogReg) | 0.771 | 0.293 | 0.805 | 0.766 |
+| **Method 1:** LLM + Rule-Based Hybrid (7B) | 0.191 | 0.310 | 0.161 | 0.113 |
+| **Method 2:** LLM-as-a-judge (Qwen3-235B) | 0.859 | 0.315 | 0.844 | 0.792 |
+| **Method 3: Fine-tuned ModernBERT** 🏆 | **0.979** | **0.762** | **0.985** | **0.981** |
 
-Базовый датасет — [ToolACE](https://huggingface.co/datasets/Team-ACE/ToolACE) (1 034 чистых триплета user → tool_output → final assistant text).
+> **Key Finding:** Supervised fine-tuning of a token classifier (`ModernBERT`) on our domain-specific dataset overwhelmingly outperforms all zero-shot and few-shot methods. Meanwhile, `LookBackLens` proves to be a highly effective and memory-efficient baseline when applied to a 3B backbone using our custom hook-based attention extraction.
 
-Бейзлайны для побития:
-- [LettuceDetect](https://arxiv.org/abs/2502.17125) (ModernBERT token classifier, обучен на RAGTruth)
-- [LookBackLens](https://arxiv.org/abs/2407.07071) (attention-based; пока не прогоняли)
+## Taxonomy and Dataset
 
-Финальная сдача — Jupyter Notebook в стиле `assignment_template.ipynb` + датасет на HF + сабмит на CodaLab.
+The dataset (`dakoblov/Hallucinations` on HuggingFace) is derived from ToolACE and structured in the RAGTruth format. It features three types of injected hallucinations:
 
-## Что сделано
+1. **Type 1 (Contradiction):** The answer contradicts a specific value in the tool output JSON. Generated via a priority-based deterministic substring substitution pipeline (in-sample pools, type-aware numeric/date/URL shifts) with an LLM fallback.
+2. **Type 2 (Overgeneration):** The answer adds facts, statistics, or historical context not present in the tool output. Generated using Qwen3-235B.
+3. **Type 3 (Missing Tool):** The answer proposes an action requiring an API capability that is not present in the system's `tools_available` list. Generated using Qwen3-235B.
 
-### 1. Построение датасета
+## Evaluated Methods
 
-Из 11 300 диалогов ToolACE извлекли **1 034 триплета** с полным циклом (user query → tool_call → tool_output → natural-language answer). Сплит по source-id: **834 train / 50 val / 150 test**.
+1. **LettuceDetect (Baseline):** Off-the-shelf inference using `KRLabsOrg/lettucedect-large-modernbert-en-v1`. Struggles with fine-grained Type 1 point substitutions due to its RAGTruth training distribution.
+2. **LookBackLens (Baseline):** An attention-based "white-box" approach. We extract self-attention lookback ratios from `Qwen/Qwen2.5-3B-Instruct` and train a logistic regression classifier over sliding windows. We implemented a custom forward-hook extraction mechanism that drops peak attention memory from 18 GB to <1 GB, allowing processing on a single 16GB T4 GPU.
+3. **LLM + Rule-Based Hybrid:** A zero-shot pipeline using `Qwen2.5-7B-Instruct` to propose hallucinated spans, strictly gated by a regular-expression parser that protects verified grounded values from the JSON context.
+4. **LLM-as-a-judge:** An API-based approach using `Qwen3-235B` via OpenRouter. Utilizes a detailed taxonomy prompt, 4 few-shot examples, and a strict `TIGHT SPANS` instruction to extract character-accurate value-level contradictions.
+5. **Fine-tuned ModernBERT:** The LettuceDetect backbone explicitly fine-tuned on our `combined_train` dataset. It successfully learns the structural boundaries of tool-calling JSON schemas and achieves state-of-the-art results on this task.
 
-**Type 1 (Hallucination)** — гибрид rule-based + LLM:
-- *Rule-based стратегии* (72.6% покрытия source'ов): in-sample pool swap (берём другое значение того же поля из текущего tool_output), cross-sample pool, type-based int/float/url/date/bool с явными паттернами для 6+ форматов дат и hardcoded правилами для bool-полей вроде `is_correct → (Incorrect)`, `is valid → is invalid`.
-- *LLM-fallback* через `qwen/qwen3-235b-a22b-2507` — на оставшиеся 28%. С promptом и word-boundary валидацией. 99.8% итогового покрытия (1 032 / 1 034).
-- *Augmentation:* до 5 вариантов на train source с round-robin diversity по стратегиям. Train: **4 057**.
+## Repository Structure
 
-**Type 2 (Overgeneration)** — 100% LLM (overgeneration по природе требует естественной генерации текста). LLM добавляет одно declarative предложение с правдоподобной фабрикованной статистикой/контекстом, не упомянутым в tool_output. Train: **2 500** (3 варианта на source).
+To keep the final report clean and academic, all execution code is factored out into standalone, reproducible Jupyter notebooks.
 
-**Type 3 (Missing Tool)** — сначала rule-based с 15 категориями действий + topic-aware ранжированием (88% topic-aware, 12% random); потом перешли на полностью LLM, потому что 30/30 ручной проверки показали кардинально лучшее качество (LLM привязывается к entities из диалога, ловит тонкие gap'ы в API типа «есть `getSnowboardGearAvailability` но нет reservation»). Train: **2 502** (3 варианта на source). Rule-based код оставлен в репо как референс.
+* `final_notebook.ipynb` — The main academic report discussing methodology, architecture choices, and aggregated results.
+* `notebooks/` — Executable pipelines for each method:
+  * `dataset_construction.ipynb` — Rule-based and LLM-based hallucination injection.
+  * `1_lettuce_baseline.ipynb` — Off-the-shelf LettuceDetect evaluation.
+  * `2_lookback_baseline.ipynb` — LookBackLens hook-based extraction and classifier training.
+  * `3_finetune_modernbert.ipynb` — Supervised token classification fine-tuning.
+  * `4_llm_rulebased.ipynb` — Hybrid generation + regex guardrails.
+  * `5_llm_as_a_judge.ipynb` — OpenRouter 235B API evaluation.
+* `src/` & `scripts/` — Underlying Python modules for dataset building and baselines.
+* `results/` — Raw JSON metric outputs from all notebooks.
+* `checkpoints/` — Local storage for trained weights (ignored in Git).
 
-**Финальные размеры:**
+## How to Run (Docker Environment)
 
-| | Hallucinated | Clean | Total |
-|---|---|---|---|
-| Combined train | 9 059 | 834 | **9 893** (8% clean) |
-| Combined val | 150 | 50 | **200** (25% clean) |
-| Combined test | 449 | 150 | **599** (25% clean) |
+We recommend a Linux environment with at least one 16GB GPU (e.g., NVIDIA T4, V100, RTX 3090/4090) and Docker with the NVIDIA Container Toolkit installed.
 
-Clean-сэмплы — оригинальные ответы из ToolACE без инжекций. Это критично для измерения precision (без negatives Ex P всегда был = 1.0 и метрика была бессмысленной).
-
-### 2. Baseline: LettuceDetect off-the-shelf
-
-`KRLabsOrg/lettucedect-large-modernbert-en-v1` через Colab T4 на `combined_test`:
-
-| Split | N | Span F1 | Span macro | Ex F1 |
-|---|---|---|---|---|
-| Combined | 599 | **0.660** | 0.629 | 0.886 |
-| Type 1 + clean | 300 | 0.137 | 0.440 | 0.716 |
-| Type 2 + clean | 300 | 0.726 | 0.746 | 0.833 |
-| Type 3 + clean | 299 | 0.597 | 0.671 | 0.795 |
-
-Type 1 проседает: median gold span 9 chars, а LettuceDetect обучен на RAGTruth, где спаны — целые предложения. Modельная щётка слишком крупная.
-
-### 3. Improvement: LLM-as-judge детектор (Qwen3-235B)
-
-Тот же Qwen3 теперь как **детектор** через OpenRouter. Промпт: описание 3 типов + правило TIGHT SPANS для value-level контрадикций + few-shot из train (1 пример каждого типа + 1 clean).
-
-**Сравнение:**
-
-| Split | LettuceDetect F1 | LLM F1 | Δ |
-|---|---|---|---|
-| **Combined** | 0.660 | **0.859** | **+0.199** |
-| Type 1 | 0.137 | 0.315 | +0.178 |
-| Type 2 | 0.726 | 0.844 | +0.118 |
-| Type 3 | 0.597 | 0.792 | +0.195 |
-
-Combined Recall 0.992, Ex F1 0.944. Стоимость прогона ~$0.90, ~3 минуты.
-
-Type 1 micro F1 = 0.315 при macro F1 = 0.688 — разрыв означает char-level over-prediction. LLM в Type 1 сэмплах правильно ловит инжектированный swap, но ещё ловит предсуществующие Type 3-style фразы из исходного ToolACE-ответа, которые мы не помечали. Проблема неполноты разметки, не детектора.
-
-## Структура репо
-
-```
-src/
-  data.py             # extract triples from ToolACE
-  pools.py            # value pools for Type 1 rule-based
-  dates.py            # date pattern matching (8 formats)
-  injection.py        # Type 1 rule-based strategies
-  inject_type3.py     # Type 3 rule-based (legacy reference)
-  augment.py          # variant selection with strategy diversity
-  llm_inject.py       # OpenRouter wrapper + Type 1 LLM fallback
-  llm_type2.py        # Type 2 overgeneration via LLM
-  llm_type3.py        # Type 3 missing tool via LLM
-  llm_detector.py     # LLM-as-judge detector
-  finetune.py         # ModernBERT token classifier (data prep + inference)
-  evaluation.py       # span/example P/R/F1 metrics
-  baselines/
-    lettucedetect_runner.py
-
-scripts/
-  build_type1.py             # Type 1 rule-based injection
-  build_type2.py             # Type 2 LLM injection (full)
-  build_type3.py             # Type 3 rule-based (legacy)
-  build_type3_llm.py         # Type 3 LLM injection (full)
-  build_augmented.py         # Type 1 with 5-variant augmentation
-  combine_splits.py          # combine + clean + balanced files
-  inject_llm_fallback.py     # Type 1 LLM fallback for uncovered
-  test_llm_inject.py / test_llm_type2.py / test_llm_type3.py   # smoke tests
-  test_llm_detector.py       # smoke test LLM detector
-  eval_llm_detector.py       # full detector eval
-  eval_lettucedetect.py      # local CLI eval
-  build_kaggle_notebook.py   # assembles .ipynb from cells/ folders
-
-notebooks/
-  lettucedetect_baseline/    # cells folder
-  lettucedetect_baseline.ipynb
-  finetune_modernbert/
-  finetune_modernbert.ipynb
-
-data/
-  triples.jsonl                       # 1034 clean ToolACE triples
-  type{1,2,3}_{train,val,test}.jsonl  # per-type hallucinated
-  type{1,2,3}_*_balanced.jsonl        # per-type + clean
-  combined_{train,val,test}.jsonl     # all types + clean, prefixed IDs
-  results_lettucedetect.json
-  results_llm_detector.json
+### 1. Setup Environment Credentials
+Before building, create a file named `credentials` in the root directory of the project to store your API keys and environment variables (used for the API-based judge):
+```bash
+echo "export OPENROUTER_API_KEY='your_api_key_here'" > credentials
 ```
 
-## Что осталось
+### 2. Build the Docker Image
+Run the provided build script to compile the Docker image containing all dependencies (CUDA, PyTorch, Transformers, and Lettucedetect):
+```bash
+chmod +x build launch_container
+./build
+```
 
-- LookBackLens baseline (второй обязательный baseline по условию задачи).
-- Fine-tune ModernBERT на combined_train (для сравнения с LLM detector'ом и для удешевления inference).
-- Возможный ensemble: LLM detector + rule-based JSON-value matcher для Type 1.
-- Публикация датасета на HuggingFace и финальный submission на CodaLab.
-- Финальный отчёт-ноутбук в формате `assignment_template.ipynb`.
+### 3. Launch the Container
+Run the launch script. This will start the container with GPU access, mount your local project directory to `/app`, and automatically start the Jupyter Notebook server:
+```bash
+./launch_container
+```
 
-## Рабочие документы
+### 4. Connect to the Jupyter Notebook
+Once the container starts, open your web browser and connect to the Jupyter server running on port **8881**:
+```
+http://localhost:8881
+```
 
-- [description.md](description.md) — подробное описание задачи и выжимки из статей.
-- [tasks.md](tasks.md) — все задачи проекта (todo / in progress / done).
-- [insights.md](insights.md) — наблюдения по экспериментам.
-- [rules.md](rules.md) — правила работы (язык, формат финального ноутбука, ресурсы).
+### 5. Execute the Pipelines
+Once inside the Jupyter interface:
+1. Open the main report notebook: **`final_notebook.ipynb`**.
+2. Follow the inline instructions and run the cells sequentially to aggregate the results or navigate to the individual notebooks in the `notebooks/` folder to run specific experiments.
+```
