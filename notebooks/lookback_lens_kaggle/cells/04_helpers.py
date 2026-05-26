@@ -103,21 +103,6 @@ def span_feature(ratios, idxs):
         return np.zeros(ratios.shape[0] * ratios.shape[1], dtype=np.float16)
     return ratios[:, :, idxs].mean(axis=-1).reshape(-1).astype(np.float16)
 
-def random_negative_chunks(offsets, gold_idxs, window, n_chunks, rng):
-    n = offsets.shape[0]
-    if n < window: return []
-    starts = [s for s in range(0, n - window + 1)
-              if not any(i in gold_idxs for i in range(s, s + window))]
-    if not starts: return []
-    rng.shuffle(starts)
-    chosen, used = [], set()
-    for s in starts:
-        if any(i in used for i in range(s, s + window)): continue
-        chosen.append(list(range(s, s + window)))
-        used.update(range(s, s + window))
-        if len(chosen) >= n_chunks: break
-    return chosen
-
 def sliding_windows(ratios, window, stride):
     n = ratios.shape[-1]
     if n == 0: return np.zeros((0, ratios.shape[0]*ratios.shape[1]), dtype=np.float16), []
@@ -129,19 +114,21 @@ def sliding_windows(ratios, window, stride):
     return np.stack(feats), idx_lists
 
 def windows_to_spans(offsets, idx_lists, scores, threshold):
+    """Paper-style: merge consecutive positive chunks into one char span."""
     if not idx_lists: return []
-    n = offsets.shape[0]
-    token_score = np.zeros(n, dtype=np.float32)
-    for idxs, s in zip(idx_lists, scores):
-        for i in idxs:
-            if s > token_score[i]: token_score[i] = s
-    flags = token_score > threshold
     spans, cs, ce, cm = [], None, None, 0.0
-    for i, (a, b) in enumerate(offsets):
-        if a == b: continue
-        if flags[i]:
-            if cs is None: cs = int(a)
-            ce = int(b); cm = max(cm, float(token_score[i]))
+    for idxs, sc in zip(idx_lists, scores):
+        if sc > threshold:
+            chunk_start = int(offsets[idxs[0], 0])
+            chunk_end = int(offsets[idxs[-1], 1])
+            if cs is None:
+                cs, ce = chunk_start, chunk_end
+            elif chunk_start <= ce:
+                ce = max(ce, chunk_end)
+            else:
+                spans.append({"start": cs, "end": ce, "confidence": cm})
+                cs, ce, cm = chunk_start, chunk_end, 0.0
+            cm = max(cm, float(sc))
         else:
             if cs is not None:
                 spans.append({"start": cs, "end": ce, "confidence": cm})

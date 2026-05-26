@@ -14,11 +14,11 @@ if DATA_DIR is None:
 else:
     print(f"Using DATA_DIR = {DATA_DIR}")
 
-BASE_MODEL = "meta-llama/Llama-3.2-3B-Instruct"
+# Backbone LM that exposes per-layer attention. Qwen2.5-3B is fully open (no HF auth).
+BASE_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 MAX_LENGTH = 4096
-WINDOW = 8                  # sliding-window size at inference (tokens)
-STRIDE = 4                  # sliding-window stride
-N_NEG_PER_SAMPLE = 3        # negative training chunks per train sample
+WINDOW = 8                  # chunk size from the paper (Table 3)
+STRIDE = 8                  # non-overlapping chunks (paper's sliding-window setup)
 THRESHOLD = 0.5
 SEED = 42
 
